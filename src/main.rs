@@ -181,7 +181,7 @@ fn select_id_2_todo_task_full(state: RootState) -> Option<i32> {
 
 fn test_observer(state: RootState) -> bool {
     match select_id_2_todo_task_full(state) {
-        Some(99) => true,
+        Some(222) => true,
         Some(_) => false,
         None => false
     }
@@ -196,17 +196,21 @@ fn main() {
 
     store.register_reducer(Box::new(todo_reducer));
 
-    store.observe(Box::new(test_observer), Box::new(|v| println!("task 2 is 99! {:?}", v)));
+    store.observe(Box::new(test_observer), Box::new(|v| println!("task 2 is 222! {:?}", v)));
 
-    store.dispatch(EntityAction::AddEntity(Todo { id: 1, task: 42 }));
+    store.dispatch(EntityAction::AddEntity(Todo { id: 1, task: 11 }));
     println!("State is {:?}", store.get_state());
-    store.dispatch(EntityAction::AddEntity(Todo { id: 2, task: 55 }));
+    store.dispatch(EntityAction::AddEntity(Todo { id: 2, task: 22 }));
+    store.dispatch(EntityAction::AddEntity(Todo { id: 3, task: 33 }));
     println!("State is {:?}", store.get_state());
 
     store.dispatch(EntityAction::RemoveEntity(1));
     println!("State is {:?}", store.get_state());
 
-    store.dispatch(EntityAction::UpdateEntity(Todo { id: 2, task: 99 }));
+    store.dispatch(EntityAction::UpdateEntity(Todo { id: 2, task: 222 }));
+    store.dispatch(EntityAction::UpdateEntity(Todo { id: 2, task: 0 }));
+    store.dispatch(EntityAction::RemoveEntity(2));
+    store.dispatch(EntityAction::AddEntity(Todo { id: 2, task: 222 }));
 
     println!("State select_id_2_todo_task_full is {:?}", store.select(Box::new(select_id_2_todo_task_full)));
 }
