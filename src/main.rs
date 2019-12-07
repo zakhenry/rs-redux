@@ -22,7 +22,7 @@ impl<T: Identifiable + Clone> Collection<T> {
         Collection { ids: vec![], entities: Default::default() }
     }
 
-    fn add(&self, entity: &T) -> Collection<T> {
+    fn add(self, entity: &T) -> Collection<T> {
 
         let mut new_collection = self.clone();
 
@@ -34,18 +34,20 @@ impl<T: Identifiable + Clone> Collection<T> {
         new_collection
     }
 
-    fn update(&self, entity: &T) -> Collection<T> {
-
-        let mut new_collection = self.clone();
+    fn update(self, entity: &T) -> Collection<T> {
 
         let id = entity.get_id();
 
-        new_collection.entities.insert(id, entity.clone());
+        let mut entities = self.entities.clone();
+        entities.insert(id, entity.clone());
 
-        new_collection
+        Collection {
+            ids: self.ids, // ids here is moved, not copied
+            entities
+        }
     }
 
-    fn remove(&self, id: &i32) -> Collection<T> {
+    fn remove(self, id: &i32) -> Collection<T> {
 
         let mut new_collection = self.clone();
 
@@ -114,9 +116,9 @@ impl<State, Action> Store<State, Action> where State: Clone, Action: Clone {
 fn entity_reducer<Entity: Identifiable + Clone>(entity_state: Collection<Entity>, action: &EntityAction<Entity>) -> Collection<Entity> {
 
     match action {
-        EntityAction::AddEntity(entity) => entity_state.clone().add(entity),
-        EntityAction::ReplaceEntity(entity) => entity_state.clone().update(entity),
-        EntityAction::RemoveEntity(id) => entity_state.clone().remove(id),
+        EntityAction::AddEntity(entity) => entity_state.add(entity),
+        EntityAction::ReplaceEntity(entity) => entity_state.update(entity),
+        EntityAction::RemoveEntity(id) => entity_state.remove(id),
     }
 
 }
@@ -141,7 +143,8 @@ impl Todo {
 #[derive(Clone)]
 enum TodoAction {
     Entity(EntityAction<Todo>),
-    MarkDone(i32, bool)
+    MarkDone(i32, bool),
+    ChangeText(i32, String)
 }
 
 
@@ -175,11 +178,21 @@ fn todo_reducer(todo_state: RootState, action: &TodoAction) -> RootState {
         TodoAction::MarkDone(id, done) => {
             let mut new_state = todo_state.clone();
 
-            let mut todo = new_state.todos.entities.get_mut(id.borrow()).expect("Cannot mark missing todo as done");
+            let mut todo = new_state.todos.entities.get_mut(id).expect("Cannot mark missing todo as done");
 
             todo.done = *done;
 
             new_state
+        }
+        TodoAction::ChangeText(id, text) => {
+
+            let mut new_state = todo_state.clone();
+            let mut todo = new_state.todos.entities.get_mut(id).expect("Cannot update text of missing todo");
+
+            todo.task = text.to_owned();
+
+            new_state
+
         }
     }
 
@@ -231,6 +244,10 @@ fn main() {
     store.dispatch(TodoAction::Entity(EntityAction::ReplaceEntity(Todo::new(2, "get goodest") )));
     store.dispatch(TodoAction::Entity(EntityAction::RemoveEntity(2)));
     store.dispatch(TodoAction::Entity(EntityAction::AddEntity(Todo::new(2, "get good") )));
+
+    store.dispatch(TodoAction::ChangeText(2, String::from("git gud")));
+
+    println!("State is {:?}", store.get_state());
 
     println!("State select_id_2_todo_task_full is {:?}", store.select(Box::new(select_id_2_todo_task_done)));
 }
