@@ -5,12 +5,6 @@ trait Identifiable {
     fn get_id(&self) -> i32;
 }
 
-impl Identifiable for Todo {
-    fn get_id(&self) -> i32 {
-        self.id
-    }
-}
-
 #[derive(Debug)]
 struct Collection<T: Identifiable + Clone> {
     ids: Vec<i32>,
@@ -28,35 +22,35 @@ impl<T: Identifiable + Clone> Collection<T> {
         Collection { ids: vec![], entities: Default::default() }
     }
 
-    fn add(&self, entity: T) -> Collection<T> {
+    fn add(&self, entity: &T) -> Collection<T> {
 
         let mut new_collection = self.clone();
 
         let id = entity.get_id();
 
         new_collection.ids.push(id);
-        new_collection.entities.insert(id, entity);
+        new_collection.entities.insert(id, entity.clone());
 
         new_collection
     }
 
-    fn update(&self, entity: T) -> Collection<T> {
+    fn update(&self, entity: &T) -> Collection<T> {
 
         let mut new_collection = self.clone();
 
         let id = entity.get_id();
 
-        new_collection.entities.insert(id, entity);
+        new_collection.entities.insert(id, entity.clone());
 
         new_collection
     }
 
-    fn remove(&self, id: i32) -> Collection<T> {
+    fn remove(&self, id: &i32) -> Collection<T> {
 
         let mut new_collection = self.clone();
 
-        new_collection.ids.remove(new_collection.ids.iter().position(|&e| e == id).expect("Entity should exist!"));
-        new_collection.entities.remove(id.borrow());
+        new_collection.ids.remove(new_collection.ids.iter().position(|&e| e == *id).expect("Entity should exist!"));
+        new_collection.entities.remove(id);
 
         new_collection
     }
@@ -69,14 +63,8 @@ enum EntityAction<T: Identifiable> {
     ReplaceEntity(T),
 }
 
-#[derive(Clone)]
-enum TodoAction {
-    Entity(EntityAction<Todo>),
-    MarkDone(i32, bool)
-}
 
-
-type Reducer<State, Action> = dyn Fn(State, Action) -> State;
+type Reducer<State, Action> = dyn Fn(State, &Action) -> State;
 type Observer<T> = dyn Fn(T);
 
 type Selector<State, T> = dyn Fn(State) -> T;
@@ -92,33 +80,6 @@ struct Store<T, A> {
     observers: Vec<ObserverSelector<T, bool>>,
 }
 
-// Concrete impl follows
-
-#[derive(Debug, Clone)]
-struct Todo {
-    id: i32,
-    task: String,
-    done: bool,
-}
-
-impl Todo {
-    fn new(id: i32, task: &str) -> Todo {
-        Todo { task: String::from(task), id, done: false }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RootState {
-    todos: Collection<Todo>
-}
-
-impl RootState {
-    fn new() -> RootState {
-        RootState { todos: Collection::new() }
-    }
-}
-
-
 impl<State, Action> Store<State, Action> where State: Clone, Action: Clone {
 
     fn new(state: State) -> Self {
@@ -131,7 +92,7 @@ impl<State, Action> Store<State, Action> where State: Clone, Action: Clone {
     }
 
     fn dispatch(&mut self, action: Action) {
-        self.state = self.reducers.iter().fold(self.state.clone(), |prev_state, reducer| reducer(prev_state, action.clone()));
+        self.state = self.reducers.iter().fold(self.state.clone(), |prev_state, reducer| reducer(prev_state, &action));
 
         self.observers.iter().for_each(|so| (so.observer)((so.selector)(self.state.clone())));
     }
@@ -150,7 +111,7 @@ impl<State, Action> Store<State, Action> where State: Clone, Action: Clone {
 
 }
 
-fn entity_reducer<Entity: Identifiable + Clone>(entity_state: Collection<Entity>, action: EntityAction<Entity>) -> Collection<Entity> {
+fn entity_reducer<Entity: Identifiable + Clone>(entity_state: Collection<Entity>, action: &EntityAction<Entity>) -> Collection<Entity> {
 
     match action {
         EntityAction::AddEntity(entity) => entity_state.clone().add(entity),
@@ -160,13 +121,54 @@ fn entity_reducer<Entity: Identifiable + Clone>(entity_state: Collection<Entity>
 
 }
 
-fn todo_reducer(todo_state: RootState, action: TodoAction) -> RootState {
+
+// Concrete impl follows
+
+#[derive(Debug, Clone)]
+struct Todo {
+    id: i32,
+    task: String,
+    done: bool,
+}
+
+impl Todo {
+    fn new(id: i32, task: &str) -> Todo {
+        Todo { task: String::from(task), id, done: false }
+    }
+}
+
+
+#[derive(Clone)]
+enum TodoAction {
+    Entity(EntityAction<Todo>),
+    MarkDone(i32, bool)
+}
+
+
+impl Identifiable for Todo {
+    fn get_id(&self) -> i32 {
+        self.id
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RootState {
+    todos: Collection<Todo>
+}
+
+impl RootState {
+    fn new() -> RootState {
+        RootState { todos: Collection::new() }
+    }
+}
+
+fn todo_reducer(todo_state: RootState, action: &TodoAction) -> RootState {
 
     match action {
         TodoAction::Entity(x) => {
             let mut new_state = todo_state.clone();
 
-            new_state.todos = entity_reducer(todo_state.todos, x);
+            new_state.todos = entity_reducer(todo_state.todos, &x);
 
             new_state
         },
@@ -175,7 +177,7 @@ fn todo_reducer(todo_state: RootState, action: TodoAction) -> RootState {
 
             let mut todo = new_state.todos.entities.get_mut(id.borrow()).expect("Cannot mark missing todo as done");
 
-            todo.done = done;
+            todo.done = *done;
 
             new_state
         }
