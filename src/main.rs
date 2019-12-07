@@ -62,16 +62,21 @@ impl<T: Identifiable + Clone> Collection<T> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum EntityAction<T> {
+#[derive(Clone)]
+enum EntityAction<T: Identifiable> {
     AddEntity(T),
     RemoveEntity(i32),
-    UpdateEntity(T),
+    ReplaceEntity(T),
+}
+
+#[derive(Clone)]
+enum TodoAction {
+    Entity(EntityAction<Todo>),
+    MarkDone(i32, bool)
 }
 
 
 type Reducer<State, Action> = dyn Fn(State, Action) -> State;
-type EntityReducer<State, Entity> = Reducer<State, EntityAction<Entity>>;
 type Observer<T> = dyn Fn(T);
 
 type Selector<State, T> = dyn Fn(State) -> T;
@@ -81,18 +86,25 @@ struct ObserverSelector<State, T> {
     observer: Box<Observer<T>>
 }
 
-struct Store<T, P> {
+struct Store<T, A> {
     state: T,
-    reducers: Vec<Box<EntityReducer<T, P>>>,
+    reducers: Vec<Box<Reducer<T, A>>>,
     observers: Vec<ObserverSelector<T, bool>>,
 }
 
 // Concrete impl follows
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 struct Todo {
     id: i32,
-    task: i32
+    task: String,
+    done: bool,
+}
+
+impl Todo {
+    fn new(id: i32, task: &str) -> Todo {
+        Todo { task: String::from(task), id, done: false }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -107,67 +119,71 @@ impl RootState {
 }
 
 
-impl Store<RootState, Todo> {
+impl<State, Action> Store<State, Action> where State: Clone, Action: Clone {
 
-    fn new(state: RootState) -> Store<RootState, Todo> {
+    fn new(state: State) -> Self {
         Store { state, reducers: vec![], observers: vec![] }
     }
 
-    fn register_reducer(&mut self, reducer: Box<EntityReducer<RootState, Todo>>) -> &mut Store<RootState, Todo> {
+    fn register_reducer(&mut self, reducer: Box<Reducer<State, Action>>) -> &mut Self {
         self.reducers.push(reducer);
         self
     }
 
-    fn dispatch(&mut self, action: EntityAction<Todo>) {
-        self.state = self.reducers.iter().fold(self.state.clone(), |prev_state, reducer| reducer(prev_state, action));
+    fn dispatch(&mut self, action: Action) {
+        self.state = self.reducers.iter().fold(self.state.clone(), |prev_state, reducer| reducer(prev_state, action.clone()));
 
         self.observers.iter().for_each(|so| (so.observer)((so.selector)(self.state.clone())));
     }
 
-    fn get_state(&self) -> &RootState {
+    fn get_state(&self) -> &State {
         self.state.borrow()
     }
 
-    fn select<T>(&self, selector: Box<Selector<RootState, T>>) -> T {
+    fn select<T>(&self, selector: Box<Selector<State, T>>) -> T {
         selector(self.state.clone())
     }
 
-    fn observe(&mut self, selector: Box<Selector<RootState, bool>>, observer: Box<Observer<bool>>) {
+    fn observe(&mut self, selector: Box<Selector<State, bool>>, observer: Box<Observer<bool>>) {
         self.observers.push(ObserverSelector {selector, observer })
     }
 
 }
 
-fn todo_reducer(todo_state: RootState, action: EntityAction<Todo>) -> RootState {
-
+fn entity_reducer<Entity: Identifiable + Clone>(entity_state: Collection<Entity>, action: EntityAction<Entity>) -> Collection<Entity> {
 
     match action {
-        EntityAction::AddEntity(todo) => {
-            let mut new_state = todo_state.clone();
-
-            new_state.todos = todo_state.todos.add(todo);
-
-            new_state
-        },
-        EntityAction::UpdateEntity(todo) => {
-            let mut new_state = todo_state.clone();
-
-            new_state.todos = todo_state.todos.update(todo);
-
-            new_state
-        },
-        EntityAction::RemoveEntity(id) => {
-            let mut new_state = todo_state.clone();
-
-            new_state.todos = todo_state.todos.remove(id);
-
-            new_state
-        },
+        EntityAction::AddEntity(entity) => entity_state.clone().add(entity),
+        EntityAction::ReplaceEntity(entity) => entity_state.clone().update(entity),
+        EntityAction::RemoveEntity(id) => entity_state.clone().remove(id),
     }
 
 }
 
-fn select_id_2_todo_task_full(state: RootState) -> Option<i32> {
+fn todo_reducer(todo_state: RootState, action: TodoAction) -> RootState {
+
+    match action {
+        TodoAction::Entity(x) => {
+            let mut new_state = todo_state.clone();
+
+            new_state.todos = entity_reducer(todo_state.todos, x);
+
+            new_state
+        },
+        TodoAction::MarkDone(id, done) => {
+            let mut new_state = todo_state.clone();
+
+            let mut todo = new_state.todos.entities.get_mut(id.borrow()).expect("Cannot mark missing todo as done");
+
+            todo.done = done;
+
+            new_state
+        }
+    }
+
+}
+
+fn select_id_2_todo_task_done(state: RootState) -> Option<bool> {
 
     let collection = state.todos;
 
@@ -175,14 +191,13 @@ fn select_id_2_todo_task_full(state: RootState) -> Option<i32> {
 
     match todo {
         None => None,
-        Some(t) => Some(t.task),
+        Some(t) => Some(t.done),
     }
 }
 
 fn test_observer(state: RootState) -> bool {
-    match select_id_2_todo_task_full(state) {
-        Some(222) => true,
-        Some(_) => false,
+    match select_id_2_todo_task_done(state) {
+        Some(_) => true,
         None => false
     }
 }
@@ -192,25 +207,28 @@ fn main() {
 
     println!("Hello, redux!");
 
-    let mut store = Store::new(RootState::new());
+    let mut store: Store<RootState, TodoAction> = Store::new(RootState::new());
 
     store.register_reducer(Box::new(todo_reducer));
 
-    store.observe(Box::new(test_observer), Box::new(|v| println!("task 2 is 222! {:?}", v)));
+    store.observe(Box::new(test_observer), Box::new(|v| println!("task 2 is set! {:?}", v)));
 
-    store.dispatch(EntityAction::AddEntity(Todo { id: 1, task: 11 }));
+    store.dispatch(TodoAction::Entity(EntityAction::AddEntity(Todo::new(1, "understand &references") )));
     println!("State is {:?}", store.get_state());
-    store.dispatch(EntityAction::AddEntity(Todo { id: 2, task: 22 }));
-    store.dispatch(EntityAction::AddEntity(Todo { id: 3, task: 33 }));
-    println!("State is {:?}", store.get_state());
-
-    store.dispatch(EntityAction::RemoveEntity(1));
+    store.dispatch(TodoAction::Entity(EntityAction::AddEntity(Todo::new(2, "get good") )));
+    store.dispatch(TodoAction::Entity(EntityAction::AddEntity(Todo::new(3, "understand 'lifetimes") )));
     println!("State is {:?}", store.get_state());
 
-    store.dispatch(EntityAction::UpdateEntity(Todo { id: 2, task: 222 }));
-    store.dispatch(EntityAction::UpdateEntity(Todo { id: 2, task: 0 }));
-    store.dispatch(EntityAction::RemoveEntity(2));
-    store.dispatch(EntityAction::AddEntity(Todo { id: 2, task: 222 }));
+    store.dispatch(TodoAction::MarkDone(1, true));
+    store.dispatch(TodoAction::MarkDone(2, true));
+    println!("State is {:?}", store.get_state());
+    store.dispatch(TodoAction::Entity(EntityAction::RemoveEntity(1)));
+    println!("State is {:?}", store.get_state());
 
-    println!("State select_id_2_todo_task_full is {:?}", store.select(Box::new(select_id_2_todo_task_full)));
+    store.dispatch(TodoAction::Entity(EntityAction::ReplaceEntity(Todo::new(2, "get gooder") )));
+    store.dispatch(TodoAction::Entity(EntityAction::ReplaceEntity(Todo::new(2, "get goodest") )));
+    store.dispatch(TodoAction::Entity(EntityAction::RemoveEntity(2)));
+    store.dispatch(TodoAction::Entity(EntityAction::AddEntity(Todo::new(2, "get good") )));
+
+    println!("State select_id_2_todo_task_full is {:?}", store.select(Box::new(select_id_2_todo_task_done)));
 }
