@@ -1,6 +1,12 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
 
+use tokio::time;
+use futures::{Stream};
+use std::time::{Duration};
+use futures::task::{Context, Poll};
+use std::pin::Pin;
+
 trait Identifiable {
     fn get_id(&self) -> i32;
 }
@@ -78,6 +84,8 @@ struct ObserverSelector<State, T> {
 
 struct Store<T, A> {
     state: T,
+    state_changes: i32,
+    last_stream_dispatch: i32,
     reducers: Vec<Box<Reducer<T, A>>>,
     observers: Vec<ObserverSelector<T, bool>>,
 }
@@ -85,7 +93,7 @@ struct Store<T, A> {
 impl<State, Action> Store<State, Action> where State: Clone, Action: Clone {
 
     fn new(state: State) -> Self {
-        Store { state, reducers: vec![], observers: vec![] }
+        Store { state, reducers: vec![], observers: vec![], state_changes: 0, last_stream_dispatch: 0 }
     }
 
     fn register_reducer(&mut self, reducer: Box<Reducer<State, Action>>) -> &mut Self {
@@ -97,6 +105,8 @@ impl<State, Action> Store<State, Action> where State: Clone, Action: Clone {
         self.state = self.reducers.iter().fold(self.state.clone(), |prev_state, reducer| reducer(prev_state, &action));
 
         self.observers.iter().for_each(|so| (so.observer)((so.selector)(self.state.clone())));
+
+        self.state_changes += 1;
     }
 
     fn get_state(&self) -> &State {
@@ -111,6 +121,22 @@ impl<State, Action> Store<State, Action> where State: Clone, Action: Clone {
         self.observers.push(ObserverSelector {selector, observer })
     }
 
+}
+
+impl<S, A> Unpin for Store<S, A> {}
+
+impl<S, A> Stream for Store<S, A> where S: Clone {
+    type Item = S;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+
+        if self.last_stream_dispatch != self.state_changes {
+            return Poll::Pending;
+        }
+
+        self.last_stream_dispatch = self.state_changes;
+        Poll::Ready(Some(self.state.clone()))
+    }
 }
 
 fn entity_reducer<Entity: Identifiable + Clone>(entity_state: Collection<Entity>, action: &EntityAction<Entity>) -> Collection<Entity> {
@@ -218,36 +244,54 @@ fn test_observer(state: RootState) -> bool {
 }
 
 
-fn main() {
 
+#[tokio::main]
+async fn main() {
+
+    let mut interval = time::interval(Duration::from_secs(1));
+    interval.tick().await;
     println!("Hello, redux!");
+
 
     let mut store: Store<RootState, TodoAction> = Store::new(RootState::new());
 
     store.register_reducer(Box::new(todo_reducer));
 
+    interval.tick().await;
     store.observe(Box::new(test_observer), Box::new(|v| println!("task 2 is set! {:?}", v)));
 
+    interval.tick().await;
     store.dispatch(TodoAction::Entity(EntityAction::AddEntity(Todo::new(1, "understand &references") )));
     println!("State is {:?}", store.get_state());
+    interval.tick().await;
     store.dispatch(TodoAction::Entity(EntityAction::AddEntity(Todo::new(2, "get good") )));
+    interval.tick().await;
     store.dispatch(TodoAction::Entity(EntityAction::AddEntity(Todo::new(3, "understand 'lifetimes") )));
     println!("State is {:?}", store.get_state());
 
+    interval.tick().await;
     store.dispatch(TodoAction::MarkDone(1, true));
+    interval.tick().await;
     store.dispatch(TodoAction::MarkDone(2, true));
     println!("State is {:?}", store.get_state());
+    interval.tick().await;
     store.dispatch(TodoAction::Entity(EntityAction::RemoveEntity(1)));
     println!("State is {:?}", store.get_state());
 
+    interval.tick().await;
     store.dispatch(TodoAction::Entity(EntityAction::ReplaceEntity(Todo::new(2, "get gooder") )));
+    interval.tick().await;
     store.dispatch(TodoAction::Entity(EntityAction::ReplaceEntity(Todo::new(2, "get goodest") )));
+    interval.tick().await;
     store.dispatch(TodoAction::Entity(EntityAction::RemoveEntity(2)));
+    interval.tick().await;
     store.dispatch(TodoAction::Entity(EntityAction::AddEntity(Todo::new(2, "get good") )));
 
+    interval.tick().await;
     store.dispatch(TodoAction::ChangeText(2, String::from("git gud")));
 
     println!("State is {:?}", store.get_state());
 
     println!("State select_id_2_todo_task_full is {:?}", store.select(Box::new(select_id_2_todo_task_done)));
+
 }
